@@ -199,7 +199,7 @@ function cacheHitRate(totals: UsageTotals): number {
 }
 
 function formatOffloadFooter(totals: UsageTotals): string {
-  return `↑${formatTokenCount(totals.input)} ↓${formatTokenCount(totals.output)} R${formatTokenCount(totals.cacheRead)} CH${cacheHitRate(totals).toFixed(1)}% $${formatCost(totals.cost)} (sub)`;
+  return `↑${formatTokenCount(totals.input)} ↓${formatTokenCount(totals.output)} R${formatTokenCount(totals.cacheRead)} CH${cacheHitRate(totals).toFixed(1)}% $${formatCost(totals.cost)} (offload)`;
 }
 
 function addUsage(totals: UsageTotals, usage: Usage): void {
