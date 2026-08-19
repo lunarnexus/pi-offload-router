@@ -213,6 +213,7 @@ All offload actions follow one accounting model:
 - offload usage is tracked by this plugin as an offload subtotal;
 - the plugin renders a compact Pi-style offload footer/status line;
 - `/offload status` shows the subtotal plus per-task breakdown;
+- offload usage is persisted in session custom entries so reload/resume can reconstruct it and forked sessions carry forward the copied branch totals;
 - offload usage is intentionally kept separate from Pi's main footer totals so all offload actions are counted consistently.
 
 ## Verified Pi API notes

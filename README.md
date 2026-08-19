@@ -96,6 +96,7 @@ All offload usage is tracked by this plugin as an **offload subtotal**.
 
 - Offload usage is shown in a compact footer/status line in Pi.
 - `/offload status` shows the detailed subtotal and per-task breakdown.
+- Offload usage is persisted in session custom entries, so reload/resume can rebuild the subtotal from session history and forked sessions carry forward the copied branch totals.
 - Offload usage is intentionally kept separate from Pi's main footer totals so all offload actions follow the same accounting model.
 
 ## Commands

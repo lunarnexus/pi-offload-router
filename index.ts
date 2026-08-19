@@ -51,11 +51,16 @@ type UsageTotals = {
   cost: number;
 };
 
+type PersistedOffloadUsage = {
+  slot: SlotName;
+  usage: Usage;
+};
+
 type ExtensionCtx = {
   hasUI: boolean;
   cwd: string;
   model?: PiModel;
-  sessionManager: { getBranch(): SessionEntry[] };
+  sessionManager: { getBranch(): SessionEntry[]; getEntries(): SessionEntry[] };
   modelRegistry: {
     find(provider: string, modelId: string): PiModel | undefined;
     getAvailable(): PiModel[];
@@ -74,6 +79,7 @@ const CONFIG_PATH = path.join(os.homedir(), ".pi", "agent", "offload-router.json
 const PACKAGE_ROOT = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_CONFIG_PATH = path.join(PACKAGE_ROOT, "offload-router.json");
 const HANDOFF_FILE = "HANDOFF.md";
+const OFFLOAD_USAGE_ENTRY_TYPE = "offload-router:usage";
 const SLOT_NAMES: SlotName[] = ["compaction", "branchSummary", "titleGeneration", "handoff"];
 const SLOT_SET = new Set<SlotName>(SLOT_NAMES);
 
@@ -202,6 +208,36 @@ function addUsage(totals: UsageTotals, usage: Usage): void {
   totals.cacheRead += usage.cacheRead;
   totals.cacheWrite += usage.cacheWrite;
   totals.cost += usage.cost.total;
+}
+
+function resetUsageTotals(totals: UsageTotals): void {
+  totals.calls = 0;
+  totals.input = 0;
+  totals.output = 0;
+  totals.cacheRead = 0;
+  totals.cacheWrite = 0;
+  totals.cost = 0;
+}
+
+function isPersistedOffloadUsageEntry(entry: SessionEntry): entry is SessionEntry & { type: "custom"; customType: string; data?: PersistedOffloadUsage } {
+  return entry.type === "custom" && entry.customType === OFFLOAD_USAGE_ENTRY_TYPE;
+}
+
+function restorePersistedOffloadUsage(
+  entries: SessionEntry[],
+  totals: UsageTotals,
+  bySlot: Record<SlotName, UsageTotals>,
+): void {
+  resetUsageTotals(totals);
+  for (const slot of SLOT_NAMES) resetUsageTotals(bySlot[slot]);
+
+  for (const entry of entries) {
+    if (!isPersistedOffloadUsageEntry(entry)) continue;
+    const data = entry.data;
+    if (!data || !SLOT_SET.has(data.slot)) continue;
+    addUsage(totals, data.usage);
+    addUsage(bySlot[data.slot], data.usage);
+  }
 }
 
 function loadPackageDefaultConfig(): OffloadRouterConfig {
@@ -633,21 +669,15 @@ export default function offloadRouter(pi: ExtensionAPI) {
   function recordUsage(slot: SlotName, usage: Usage, ctx: ExtensionCtx): void {
     addUsage(offloadTotals, usage);
     addUsage(offloadBySlot[slot], usage);
+    pi.appendEntry<PersistedOffloadUsage>(OFFLOAD_USAGE_ENTRY_TYPE, { slot, usage });
     refreshOffloadFooter(ctx);
   }
 
   pi.on("session_start", async (_event, ctx) => {
-    completionModels = availableModelIds(ctx as unknown as ExtensionCtx);
-    offloadTotals.calls = 0;
-    offloadTotals.input = 0;
-    offloadTotals.output = 0;
-    offloadTotals.cacheRead = 0;
-    offloadTotals.cacheWrite = 0;
-    offloadTotals.cost = 0;
-    for (const slot of SLOT_NAMES) {
-      offloadBySlot[slot] = createEmptyUsageTotals();
-    }
-    refreshOffloadFooter(ctx as unknown as ExtensionCtx);
+    const extensionCtx = ctx as unknown as ExtensionCtx;
+    completionModels = availableModelIds(extensionCtx);
+    restorePersistedOffloadUsage(extensionCtx.sessionManager.getEntries(), offloadTotals, offloadBySlot);
+    refreshOffloadFooter(extensionCtx);
   });
 
   pi.registerCommand("offload", {
