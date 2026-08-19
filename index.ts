@@ -65,6 +65,7 @@ type ExtensionCtx = {
     notify(message: string, level?: NotifyLevel): void;
     confirm(title: string, message: string): Promise<boolean>;
     setStatus(key: string, value: string | undefined): void;
+    theme?: { fg(color: string, text: string): string };
   };
   waitForIdle?: () => Promise<void>;
 };
@@ -191,7 +192,7 @@ function cacheHitRate(totals: UsageTotals): number {
 }
 
 function formatOffloadFooter(totals: UsageTotals): string {
-  return `↑${formatTokenCount(totals.input)} ↓${formatTokenCount(totals.output)} R${formatTokenCount(totals.cacheRead)} CH${cacheHitRate(totals).toFixed(1)}% $${formatCost(totals.cost)} (offload)`;
+  return `↑${formatTokenCount(totals.input)} ↓${formatTokenCount(totals.output)} R${formatTokenCount(totals.cacheRead)} CH${cacheHitRate(totals).toFixed(1)}% $${formatCost(totals.cost)} (sub)`;
 }
 
 function addUsage(totals: UsageTotals, usage: Usage): void {
@@ -322,6 +323,64 @@ function modelLabel(model: PiModel | undefined): string {
 
 function availableModelIds(ctx: ExtensionCtx): string[] {
   return ctx.modelRegistry.getAvailable().map((model) => `${model.provider}/${model.id}`);
+}
+
+function themedStatus(ctx: ExtensionCtx, text: string): string {
+  return ctx.ui.theme?.fg("dim", text) ?? text;
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return [...new Set(values.filter(Boolean))];
+}
+
+function filterCompletionValues(values: string[], prefix: string): Array<{ value: string; label: string }> | null {
+  const filtered = uniqueStrings(values).filter((value) => value.startsWith(prefix));
+  return filtered.length ? filtered.map((value) => ({ value, label: value })) : null;
+}
+
+function offloadModelSuggestions(config: OffloadRouterConfig, availableModels: string[]): string[] {
+  return uniqueStrings([config.defaults.model, "main", ...availableModels]);
+}
+
+function slotModelSuggestions(config: OffloadRouterConfig, availableModels: string[]): string[] {
+  return uniqueStrings(["default", ...offloadModelSuggestions(config, availableModels)]);
+}
+
+function getOffloadArgumentCompletions(
+  prefix: string,
+  config: OffloadRouterConfig,
+  availableModels: string[],
+): Array<{ value: string; label: string }> | null {
+  const hasTrailingSpace = /\s$/.test(prefix);
+  const parts = prefix.trim().split(/\s+/).filter(Boolean);
+  const subcommands = ["status", "on", "off", "model", "slot", "test"];
+
+  if (!parts.length) return filterCompletionValues(subcommands, "");
+
+  const [subcommand, second = "", third = ""] = parts;
+  if (parts.length === 1 && !hasTrailingSpace) return filterCompletionValues(subcommands, subcommand);
+
+  if (subcommand === "model") {
+    if (parts.length === 1 && hasTrailingSpace) return filterCompletionValues(offloadModelSuggestions(config, availableModels), "");
+    if (parts.length === 2 && !hasTrailingSpace) return filterCompletionValues(offloadModelSuggestions(config, availableModels), second);
+    return null;
+  }
+
+  if (subcommand === "slot") {
+    if (parts.length === 1 && hasTrailingSpace) return filterCompletionValues(SLOT_NAMES, "");
+    if (parts.length === 2 && !hasTrailingSpace) return filterCompletionValues(SLOT_NAMES, second);
+    if (parts.length === 2 && hasTrailingSpace) return filterCompletionValues(slotModelSuggestions(config, availableModels), "");
+    if (parts.length === 3 && !hasTrailingSpace) return filterCompletionValues(slotModelSuggestions(config, availableModels), third);
+    return null;
+  }
+
+  if (subcommand === "test") {
+    if (parts.length === 1 && hasTrailingSpace) return filterCompletionValues(SLOT_NAMES, "");
+    if (parts.length === 2 && !hasTrailingSpace) return filterCompletionValues(SLOT_NAMES, second);
+    return null;
+  }
+
+  return null;
 }
 
 function statusText(
@@ -555,6 +614,7 @@ function handlePassiveFailure(ctx: ExtensionCtx, slot: SlotName, error: unknown)
 
 export default function offloadRouter(pi: ExtensionAPI) {
   const offloadTotals = createEmptyUsageTotals();
+  let completionModels: string[] = [];
   const offloadBySlot: Record<SlotName, UsageTotals> = {
     compaction: createEmptyUsageTotals(),
     branchSummary: createEmptyUsageTotals(),
@@ -564,7 +624,7 @@ export default function offloadRouter(pi: ExtensionAPI) {
 
   function refreshOffloadFooter(ctx: ExtensionCtx): void {
     if (offloadTotals.calls > 0) {
-      ctx.ui.setStatus("offload-usage", formatOffloadFooter(offloadTotals));
+      ctx.ui.setStatus("offload-usage", themedStatus(ctx, formatOffloadFooter(offloadTotals)));
     } else {
       ctx.ui.setStatus("offload-usage", undefined);
     }
@@ -577,6 +637,7 @@ export default function offloadRouter(pi: ExtensionAPI) {
   }
 
   pi.on("session_start", async (_event, ctx) => {
+    completionModels = availableModelIds(ctx as unknown as ExtensionCtx);
     offloadTotals.calls = 0;
     offloadTotals.input = 0;
     offloadTotals.output = 0;
@@ -591,8 +652,10 @@ export default function offloadRouter(pi: ExtensionAPI) {
 
   pi.registerCommand("offload", {
     description: "Manage offload-router settings: /offload status|on|off|model <model>|slot <slot> <model|default|main>|test [slot] [prompt]",
+    getArgumentCompletions: (prefix) => getOffloadArgumentCompletions(prefix, getConfig(), completionModels),
     handler: async (args, ctx) => {
       const config = getConfig();
+      completionModels = availableModelIds(ctx as unknown as ExtensionCtx);
       const trimmed = args.trim();
       const [subcommand = "status", ...rest] = trimmed ? trimmed.split(/\s+/) : ["status"];
 
