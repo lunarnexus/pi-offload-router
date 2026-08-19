@@ -206,6 +206,15 @@ Examples:
 
 Generate `HANDOFF.md` using the resolved `handoff` slot model.
 
+## Usage accounting
+
+All offload actions follow one accounting model:
+
+- offload usage is tracked by this plugin as an offload subtotal;
+- the plugin renders a compact Pi-style offload footer/status line;
+- `/offload status` shows the subtotal plus per-task breakdown;
+- offload usage is intentionally kept separate from Pi's main footer totals so all offload actions are counted consistently.
+
 ## Verified Pi API notes
 
 Checked against the installed `@earendil-works/pi-coding-agent` types:

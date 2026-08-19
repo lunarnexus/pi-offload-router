@@ -90,6 +90,14 @@ Each offload task is configured separately.
   - a Pi model string like `"lmstudio/qwen3-4b-instruct"`
 - No hidden defaults live in code; effective values come from the shipped config plus explicit per-item overrides.
 
+## Usage accounting
+
+All offload usage is tracked by this plugin as an **offload subtotal**.
+
+- Offload usage is shown in a compact footer/status line in Pi.
+- `/offload status` shows the detailed subtotal and per-task breakdown.
+- Offload usage is intentionally kept separate from Pi's main footer totals so all offload actions follow the same accounting model.
+
 ## Commands
 
 Planned commands:

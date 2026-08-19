@@ -5,7 +5,7 @@ import path, { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { uuidv7 } from "@earendil-works/pi-ai";
-import type { Api, AssistantMessage, Model } from "@earendil-works/pi-ai";
+import type { Api, AssistantMessage, Model, Usage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { convertToLlm, serializeConversation } from "@earendil-works/pi-coding-agent";
 
@@ -40,6 +40,15 @@ type ResolvedOffloadTask = {
   taskTimeoutSeconds: number;
   queueTimeoutSeconds: number;
   maxTokens: number;
+};
+
+type UsageTotals = {
+  calls: number;
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  cost: number;
 };
 
 type ExtensionCtx = {
@@ -160,6 +169,39 @@ class QueueTimeoutError extends Error {
 
 let inFlight = 0;
 const waiters: Array<() => void> = [];
+
+function createEmptyUsageTotals(): UsageTotals {
+  return { calls: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, cost: 0 };
+}
+
+function formatTokenCount(value: number): string {
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1).replace(/\.0$/, "")}k`;
+  return `${value}`;
+}
+
+function formatCost(value: number): string {
+  return value.toFixed(3);
+}
+
+function cacheHitRate(totals: UsageTotals): number {
+  const denom = totals.input + totals.cacheRead;
+  if (denom <= 0) return 0;
+  return (totals.cacheRead / denom) * 100;
+}
+
+function formatOffloadFooter(totals: UsageTotals): string {
+  return `↑${formatTokenCount(totals.input)} ↓${formatTokenCount(totals.output)} R${formatTokenCount(totals.cacheRead)} CH${cacheHitRate(totals).toFixed(1)}% $${formatCost(totals.cost)} (offload)`;
+}
+
+function addUsage(totals: UsageTotals, usage: Usage): void {
+  totals.calls += 1;
+  totals.input += usage.input;
+  totals.output += usage.output;
+  totals.cacheRead += usage.cacheRead;
+  totals.cacheWrite += usage.cacheWrite;
+  totals.cost += usage.cost.total;
+}
 
 function loadPackageDefaultConfig(): OffloadRouterConfig {
   return JSON.parse(readFileSync(DEFAULT_CONFIG_PATH, "utf8")) as OffloadRouterConfig;
@@ -282,7 +324,12 @@ function availableModelIds(ctx: ExtensionCtx): string[] {
   return ctx.modelRegistry.getAvailable().map((model) => `${model.provider}/${model.id}`);
 }
 
-function statusText(config: OffloadRouterConfig, ctx: ExtensionCtx): string {
+function statusText(
+  config: OffloadRouterConfig,
+  ctx: ExtensionCtx,
+  totals: UsageTotals,
+  bySlot: Record<SlotName, UsageTotals>,
+): string {
   const lines = [
     `enabled: ${config.enabled}`,
     `config: ${CONFIG_PATH}`,
@@ -292,6 +339,7 @@ function statusText(config: OffloadRouterConfig, ctx: ExtensionCtx): string {
     `defaults.maxTokens: ${config.defaults.maxTokens}`,
     `concurrency.maxInFlight: ${config.concurrency.maxInFlight}`,
     `inFlight: ${inFlight}`,
+    `offload totals: ${formatOffloadFooter(totals)}`,
   ];
 
   for (const slot of SLOT_NAMES) {
@@ -299,8 +347,9 @@ function statusText(config: OffloadRouterConfig, ctx: ExtensionCtx): string {
     const configuredModel = config.offloads[slot]?.model ?? "default";
     const resolvedSpecifier = resolveModelSpecifier(config, slot);
     const model = resolveModelForSpecifier(resolvedSpecifier, ctx);
+    const usage = bySlot[slot];
     lines.push(
-      `${slot}: model=${configuredModel} -> ${resolvedSpecifier} -> ${modelLabel(model)}; queue=${offload.queueTimeoutSeconds}s; task=${offload.taskTimeoutSeconds}s; maxTokens=${offload.maxTokens}`,
+      `${slot}: model=${configuredModel} -> ${resolvedSpecifier} -> ${modelLabel(model)}; queue=${offload.queueTimeoutSeconds}s; task=${offload.taskTimeoutSeconds}s; maxTokens=${offload.maxTokens}; usage=${formatOffloadFooter(usage)} calls=${usage.calls}`,
     );
   }
 
@@ -353,7 +402,13 @@ async function completeForSlot(
   ctx: ExtensionCtx,
   systemPrompt: string,
   prompt: string,
-  options: { signal?: AbortSignal; maxTokens?: number; statusKey?: string; statusText?: string } = {},
+  options: {
+    signal?: AbortSignal;
+    maxTokens?: number;
+    statusKey?: string;
+    statusText?: string;
+    onUsage?: (usage: Usage) => void;
+  } = {},
 ): Promise<AssistantMessage | undefined> {
   const model = resolveModelForSlot(config, slot, ctx);
   if (!model) return undefined;
@@ -365,7 +420,7 @@ async function completeForSlot(
 
   try {
     ctx.ui.setStatus(statusKey, statusText);
-    return await ctx.modelRegistry.complete(
+    const response = await ctx.modelRegistry.complete(
       model,
       {
         systemPrompt,
@@ -385,6 +440,8 @@ async function completeForSlot(
         sessionId: uuidv7(),
       },
     );
+    if (response.usage) options.onUsage?.(response.usage);
+    return response;
   } finally {
     ctx.ui.setStatus(statusKey, undefined);
     release();
@@ -497,6 +554,41 @@ function handlePassiveFailure(ctx: ExtensionCtx, slot: SlotName, error: unknown)
 }
 
 export default function offloadRouter(pi: ExtensionAPI) {
+  const offloadTotals = createEmptyUsageTotals();
+  const offloadBySlot: Record<SlotName, UsageTotals> = {
+    compaction: createEmptyUsageTotals(),
+    branchSummary: createEmptyUsageTotals(),
+    titleGeneration: createEmptyUsageTotals(),
+    handoff: createEmptyUsageTotals(),
+  };
+
+  function refreshOffloadFooter(ctx: ExtensionCtx): void {
+    if (offloadTotals.calls > 0) {
+      ctx.ui.setStatus("offload-usage", formatOffloadFooter(offloadTotals));
+    } else {
+      ctx.ui.setStatus("offload-usage", undefined);
+    }
+  }
+
+  function recordUsage(slot: SlotName, usage: Usage, ctx: ExtensionCtx): void {
+    addUsage(offloadTotals, usage);
+    addUsage(offloadBySlot[slot], usage);
+    refreshOffloadFooter(ctx);
+  }
+
+  pi.on("session_start", async (_event, ctx) => {
+    offloadTotals.calls = 0;
+    offloadTotals.input = 0;
+    offloadTotals.output = 0;
+    offloadTotals.cacheRead = 0;
+    offloadTotals.cacheWrite = 0;
+    offloadTotals.cost = 0;
+    for (const slot of SLOT_NAMES) {
+      offloadBySlot[slot] = createEmptyUsageTotals();
+    }
+    refreshOffloadFooter(ctx as unknown as ExtensionCtx);
+  });
+
   pi.registerCommand("offload", {
     description: "Manage offload-router settings: /offload status|on|off|model <model>|slot <slot> <model|default|main>|test [slot] [prompt]",
     handler: async (args, ctx) => {
@@ -505,7 +597,7 @@ export default function offloadRouter(pi: ExtensionAPI) {
       const [subcommand = "status", ...rest] = trimmed ? trimmed.split(/\s+/) : ["status"];
 
       if (subcommand === "status") {
-        emit(ctx, statusText(config, ctx as unknown as ExtensionCtx), "info");
+        emit(ctx, statusText(config, ctx as unknown as ExtensionCtx, offloadTotals, offloadBySlot), "info");
         return;
       }
 
@@ -565,7 +657,12 @@ export default function offloadRouter(pi: ExtensionAPI) {
             ctx as unknown as ExtensionCtx,
             "Reply briefly to confirm the offload slot works.",
             prompt || "Reply with OK and the model you are running on.",
-            { maxTokens: 120, statusKey: "offload-test", statusText: `Testing ${effectiveSlot}...` },
+            {
+              maxTokens: 120,
+              statusKey: "offload-test",
+              statusText: `Testing ${effectiveSlot}...`,
+              onUsage: (usage) => recordUsage(effectiveSlot, usage, ctx as unknown as ExtensionCtx),
+            },
           );
           if (!response) {
             emit(ctx, `Could not resolve a model for ${effectiveSlot}`, "warning");
@@ -614,7 +711,11 @@ export default function offloadRouter(pi: ExtensionAPI) {
           ctx as unknown as ExtensionCtx,
           HANDOFF_SYSTEM_PROMPT,
           prompt,
-          { statusKey: "handoff", statusText: "Generating handoff..." },
+          {
+            statusKey: "handoff",
+            statusText: "Generating handoff...",
+            onUsage: (usage) => recordUsage("handoff", usage, ctx as unknown as ExtensionCtx),
+          },
         );
 
         if (!response) {
@@ -658,7 +759,12 @@ export default function offloadRouter(pi: ExtensionAPI) {
         ctx as unknown as ExtensionCtx,
         COMPACTION_SYSTEM_PROMPT,
         prompt,
-        { signal, statusKey: "offload-compaction", statusText: "Offload compaction..." },
+        {
+          signal,
+          statusKey: "offload-compaction",
+          statusText: "Offload compaction...",
+          onUsage: (usage) => recordUsage("compaction", usage, ctx as unknown as ExtensionCtx),
+        },
       );
       const summary = response ? extractText(response) : "";
       if (!summary.trim()) return;
@@ -667,7 +773,6 @@ export default function offloadRouter(pi: ExtensionAPI) {
           summary,
           firstKeptEntryId,
           tokensBefore,
-          usage: response?.usage,
         },
       };
     } catch (error) {
@@ -696,11 +801,16 @@ export default function offloadRouter(pi: ExtensionAPI) {
         ctx as unknown as ExtensionCtx,
         BRANCH_SUMMARY_SYSTEM_PROMPT,
         prompt,
-        { signal: event.signal, statusKey: "offload-branch-summary", statusText: "Offload branch summary..." },
+        {
+          signal: event.signal,
+          statusKey: "offload-branch-summary",
+          statusText: "Offload branch summary...",
+          onUsage: (usage) => recordUsage("branchSummary", usage, ctx as unknown as ExtensionCtx),
+        },
       );
       const summary = response ? extractText(response) : "";
       if (!summary.trim()) return;
-      return { summary: { summary, usage: response?.usage } };
+      return { summary: { summary } };
     } catch (error) {
       handlePassiveFailure(ctx as unknown as ExtensionCtx, "branchSummary", error);
       return;
@@ -728,7 +838,11 @@ export default function offloadRouter(pi: ExtensionAPI) {
         ctx as unknown as ExtensionCtx,
         TITLE_SYSTEM_PROMPT,
         prompt,
-        { statusKey: "offload-title", statusText: "Generating title..." },
+        {
+          statusKey: "offload-title",
+          statusText: "Generating title...",
+          onUsage: (usage) => recordUsage("titleGeneration", usage, ctx as unknown as ExtensionCtx),
+        },
       );
       const title = clipTitle(response ? extractText(response) : "");
       if (!title) return;
