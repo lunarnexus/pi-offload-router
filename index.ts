@@ -4,6 +4,7 @@ import os from "node:os";
 import path, { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
+import { parse as parseJsonc } from "jsonc-parser";
 import { uuidv7 } from "@earendil-works/pi-ai";
 import type { Api, AssistantMessage, Model, Usage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, SessionEntry } from "@earendil-works/pi-coding-agent";
@@ -240,8 +241,12 @@ function restorePersistedOffloadUsage(
   }
 }
 
+function parseConfigText(text: string): unknown {
+  return parseJsonc(text);
+}
+
 function loadPackageDefaultConfig(): OffloadRouterConfig {
-  return JSON.parse(readFileSync(DEFAULT_CONFIG_PATH, "utf8")) as OffloadRouterConfig;
+  return parseConfigText(readFileSync(DEFAULT_CONFIG_PATH, "utf8")) as OffloadRouterConfig;
 }
 
 function writeJsonFile(filePath: string, value: unknown): void {
@@ -255,7 +260,7 @@ function ensureRuntimeConfigFile(): unknown {
     writeJsonFile(CONFIG_PATH, config);
     return config;
   }
-  return JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as unknown;
+  return parseConfigText(readFileSync(CONFIG_PATH, "utf8"));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

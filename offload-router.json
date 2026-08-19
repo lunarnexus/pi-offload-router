@@ -14,22 +14,13 @@
       "maxTokens": 4096
     },
     "branchSummary": {
-      "model": "default",
-      "taskTimeoutSeconds": 120,
-      "queueTimeoutSeconds": 300,
-      "maxTokens": 4096
+      "model": "default"
     },
     "titleGeneration": {
-      "model": "default",
-      "taskTimeoutSeconds": 20,
-      "queueTimeoutSeconds": 30,
-      "maxTokens": 80
+      "model": "default"
     },
     "handoff": {
-      "model": "default",
-      "taskTimeoutSeconds": 180,
-      "queueTimeoutSeconds": 900,
-      "maxTokens": 4096
+      "model": "default"
     }
   },
   "concurrency": {

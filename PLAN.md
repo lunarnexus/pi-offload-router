@@ -34,6 +34,8 @@ Runtime config lives outside the package so updates from Gitea do not overwrite 
 
 The package includes `offload-router.json` at the repo root. On startup, if the runtime config file is missing, the extension should create it from the package default config.
 
+The runtime config is parsed as JSONC, so `//` and `/* ... */` comments are allowed.
+
 ## Accepted feature set
 
 ### 1. Compaction offload
@@ -104,22 +106,13 @@ Initial config:
       "maxTokens": 4096
     },
     "branchSummary": {
-      "model": "default",
-      "taskTimeoutSeconds": 120,
-      "queueTimeoutSeconds": 300,
-      "maxTokens": 4096
+      "model": "default"
     },
     "titleGeneration": {
-      "model": "default",
-      "taskTimeoutSeconds": 20,
-      "queueTimeoutSeconds": 30,
-      "maxTokens": 80
+      "model": "default"
     },
     "handoff": {
-      "model": "default",
-      "taskTimeoutSeconds": 180,
-      "queueTimeoutSeconds": 900,
-      "maxTokens": 4096
+      "model": "default"
     }
   },
   "concurrency": {
@@ -133,11 +126,12 @@ Rules:
 - If the config file is missing, create it from the package default.
 - `enabled: false` disables all plugin behavior except commands.
 - `defaults` contains the explicit global defaults. There are no hidden fallback defaults in code.
-- Each offload task may override any of:
+- `compaction` keeps explicit overrides for:
   - `model`
   - `taskTimeoutSeconds`
   - `queueTimeoutSeconds`
   - `maxTokens`
+- The other offloads inherit the global timeout/token settings unless the user explicitly adds overrides.
 - `model` may be either:
   - `"default"`, meaning use `defaults.model`;
   - `"main"`, meaning use Pi's currently selected main session model;
@@ -145,7 +139,7 @@ Rules:
 - Queue timeout and task timeout are separate:
   - `queueTimeoutSeconds` limits how long an item waits to acquire the concurrency slot;
   - `taskTimeoutSeconds` limits the actual model request once it starts.
-- Effective per-task values come from merging `defaults` with the specific offload config.
+- Effective per-task values come from merging `defaults` with any explicit per-offload overrides.
 
 ## Slash commands
 

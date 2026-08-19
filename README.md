@@ -37,6 +37,8 @@ Runtime config lives outside the package so package updates do not overwrite use
 
 The package includes `offload-router.json` at the repo root. On startup, if this runtime config is missing, the extension should create it from the package default config.
 
+The runtime config supports JSONC, so `//` and `/* ... */` comments are allowed.
+
 Example config:
 
 ```json
@@ -56,22 +58,13 @@ Example config:
       "maxTokens": 4096
     },
     "branchSummary": {
-      "model": "default",
-      "taskTimeoutSeconds": 120,
-      "queueTimeoutSeconds": 300,
-      "maxTokens": 4096
+      "model": "default"
     },
     "titleGeneration": {
-      "model": "default",
-      "taskTimeoutSeconds": 20,
-      "queueTimeoutSeconds": 30,
-      "maxTokens": 80
+      "model": "default"
     },
     "handoff": {
-      "model": "default",
-      "taskTimeoutSeconds": 180,
-      "queueTimeoutSeconds": 900,
-      "maxTokens": 4096
+      "model": "default"
     }
   },
   "concurrency": {
@@ -83,12 +76,13 @@ Example config:
 Each offload task is configured separately.
 
 - `defaults` provides the global explicit defaults.
-- `offloads.<name>` can override any field for that offload task.
+- `compaction` keeps explicit timeout/token overrides.
+- `branchSummary`, `titleGeneration`, and `handoff` inherit the global timeout/token settings unless you add overrides.
 - `model` can be:
   - `"default"` to use `defaults.model`
   - `"main"` to use Pi's current main session model
   - a Pi model string like `"lmstudio/qwen3-4b-instruct"`
-- No hidden defaults live in code; effective values come from the shipped config plus explicit per-item overrides.
+- No hidden defaults live in code; effective values come from the shipped config plus explicit overrides.
 
 ## Usage accounting
 
