@@ -1,4 +1,40 @@
 {
+  // pi-offload-router settings
+  //
+  // enabled:
+  //   true enables offloading; false disables offload behavior but keeps /offload commands available.
+  //
+  // defaults.model:
+  //   Shared fallback model for any offload whose model is set to "default".
+  //   Allowed values:
+  //   - "main" = use Pi's current main session model
+  //   - "provider/modelId" = use a specific model directly
+  //
+  // defaults.taskTimeoutSeconds:
+  //   Global maximum time for an offload model request after it starts running.
+  //
+  // defaults.queueTimeoutSeconds:
+  //   Global maximum time an offload waits in the queue before it gets a concurrency slot.
+  //
+  // defaults.maxTokens:
+  //   Global maximum output tokens the offload model may generate.
+  //
+  // offloads.<name>.model:
+  //   Per-offload model override.
+  //   Allowed values:
+  //   - "default" = use defaults.model
+  //   - "main" = use Pi's current main session model
+  //   - "provider/modelId" = use a specific model directly
+  //
+  // offloads.compaction.taskTimeoutSeconds / queueTimeoutSeconds / maxTokens:
+  //   Optional compaction-specific overrides for the global defaults.
+  //
+  // offloads.branchSummary / offloads.titleGeneration / offloads.handoff:
+  //   These currently inherit defaults.taskTimeoutSeconds, defaults.queueTimeoutSeconds,
+  //   and defaults.maxTokens unless you explicitly add overrides.
+  //
+  // concurrency.maxInFlight:
+  //   Maximum number of offload requests running at once.
   "enabled": true,
   "defaults": {
     "model": "main",
