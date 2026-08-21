@@ -5,7 +5,7 @@ import path, { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import { parse as parseJsonc } from "jsonc-parser";
-import { uuidv7 } from "@earendil-works/pi-ai";
+import { calculateCost, uuidv7 } from "@earendil-works/pi-ai";
 import type { Api, AssistantMessage, Model, Usage } from "@earendil-works/pi-ai";
 import type { ExtensionAPI, SessionEntry } from "@earendil-works/pi-coding-agent";
 import { convertToLlm, serializeConversation } from "@earendil-works/pi-coding-agent";
@@ -175,6 +175,17 @@ class QueueTimeoutError extends Error {
   }
 }
 
+class TaskTimeoutError extends Error {
+  constructor(
+    public readonly slot: SlotName,
+    public readonly model: string,
+    public readonly seconds: number,
+  ) {
+    super(`Timed out after ${seconds}s running ${slot} on ${model}`);
+    this.name = "TaskTimeoutError";
+  }
+}
+
 let inFlight = 0;
 const waiters: Array<() => void> = [];
 
@@ -198,8 +209,21 @@ function cacheHitRate(totals: UsageTotals): number {
   return (totals.cacheRead / denom) * 100;
 }
 
-function formatOffloadFooter(totals: UsageTotals): string {
-  return `↑${formatTokenCount(totals.input)} ↓${formatTokenCount(totals.output)} R${formatTokenCount(totals.cacheRead)} CH${cacheHitRate(totals).toFixed(1)}% $${formatCost(totals.cost)} (offload)`;
+function costForModel(totals: UsageTotals, model: PiModel | undefined): number {
+  if (!model) return totals.cost;
+  const usage: Usage = {
+    input: totals.input,
+    output: totals.output,
+    cacheRead: totals.cacheRead,
+    cacheWrite: totals.cacheWrite,
+    totalTokens: totals.input + totals.output + totals.cacheRead + totals.cacheWrite,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+  };
+  return calculateCost(model, usage).total;
+}
+
+function formatOffloadFooter(totals: UsageTotals, mainModel?: PiModel): string {
+  return `↑${formatTokenCount(totals.input)} ↓${formatTokenCount(totals.output)} R${formatTokenCount(totals.cacheRead)} CH${cacheHitRate(totals).toFixed(1)}% $${formatCost(costForModel(totals, mainModel))} (offload)`;
 }
 
 function addUsage(totals: UsageTotals, usage: Usage): void {
@@ -362,6 +386,36 @@ function modelLabel(model: PiModel | undefined): string {
   return model ? `${model.provider}/${model.id}` : "(unresolved)";
 }
 
+function errorText(error: unknown): string {
+  if (error instanceof Error) {
+    const cause = error.cause ? ` ${errorText(error.cause)}` : "";
+    return `${error.name} ${error.message}${cause}`;
+  }
+  return String(error);
+}
+
+function isTimeoutError(error: unknown): boolean {
+  if (error instanceof TaskTimeoutError) return true;
+  const text = errorText(error).toLowerCase();
+  return text.includes("timeout") || text.includes("timed out");
+}
+
+function notifyQueueTimeout(ctx: ExtensionCtx, error: QueueTimeoutError): void {
+  emit(
+    ctx,
+    `Offload queue timed out: ${error.slot} waited ${error.seconds}s. Continuing without offload result; main model is ${modelLabel(ctx.model)}.`,
+    "warning",
+  );
+}
+
+function notifyTaskTimeout(ctx: ExtensionCtx, error: TaskTimeoutError): void {
+  emit(
+    ctx,
+    `Offload timed out: ${error.slot} on ${error.model} after ${error.seconds}s. Continuing without offload result; main model is ${modelLabel(ctx.model)}.`,
+    "warning",
+  );
+}
+
 function availableModelIds(ctx: ExtensionCtx): string[] {
   return ctx.modelRegistry.getAvailable().map((model) => `${model.provider}/${model.id}`);
 }
@@ -439,7 +493,7 @@ function statusText(
     `defaults.maxTokens: ${config.defaults.maxTokens}`,
     `concurrency.maxInFlight: ${config.concurrency.maxInFlight}`,
     `inFlight: ${inFlight}`,
-    `offload totals: ${formatOffloadFooter(totals)}`,
+    `offload totals: ${formatOffloadFooter(totals, ctx.model)}`,
   ];
 
   for (const slot of SLOT_NAMES) {
@@ -449,7 +503,7 @@ function statusText(
     const model = resolveModelForSpecifier(resolvedSpecifier, ctx);
     const usage = bySlot[slot];
     lines.push(
-      `${slot}: model=${configuredModel} -> ${resolvedSpecifier} -> ${modelLabel(model)}; queue=${offload.queueTimeoutSeconds}s; task=${offload.taskTimeoutSeconds}s; maxTokens=${offload.maxTokens}; usage=${formatOffloadFooter(usage)} calls=${usage.calls}`,
+      `${slot}: model=${configuredModel} -> ${resolvedSpecifier} -> ${modelLabel(model)}; queue=${offload.queueTimeoutSeconds}s; task=${offload.taskTimeoutSeconds}s; maxTokens=${offload.maxTokens}; usage=${formatOffloadFooter(usage, ctx.model)} calls=${usage.calls}`,
     );
   }
 
@@ -508,15 +562,27 @@ async function completeForSlot(
     statusKey?: string;
     statusText?: string;
     onUsage?: (usage: Usage) => void;
+    sessionId?: string;
   } = {},
 ): Promise<AssistantMessage | undefined> {
   const model = resolveModelForSlot(config, slot, ctx);
   if (!model) return undefined;
 
   const offload = getOffloadTask(config, slot);
-  const release = await acquireSlot(slot, config.concurrency.maxInFlight, offload.queueTimeoutSeconds);
+  let release: () => void;
+  try {
+    release = await acquireSlot(slot, config.concurrency.maxInFlight, offload.queueTimeoutSeconds);
+  } catch (error) {
+    if (error instanceof QueueTimeoutError) notifyQueueTimeout(ctx, error);
+    throw error;
+  }
+
   const statusKey = options.statusKey ?? `offload-${slot}`;
   const statusText = options.statusText ?? `Running ${slot}...`;
+  const taskTimeout = new TaskTimeoutError(slot, modelLabel(model), offload.taskTimeoutSeconds);
+  const timeoutController = new AbortController();
+  const timeout = setTimeout(() => timeoutController.abort(taskTimeout), Math.max(0, offload.taskTimeoutSeconds) * 1000);
+  const signal = options.signal ? AbortSignal.any([options.signal, timeoutController.signal]) : timeoutController.signal;
 
   try {
     ctx.ui.setStatus(statusKey, statusText);
@@ -535,14 +601,21 @@ async function completeForSlot(
       {
         maxTokens: options.maxTokens ?? offload.maxTokens,
         timeoutMs: offload.taskTimeoutSeconds * 1000,
-        signal: options.signal,
-        cacheRetention: "none",
-        sessionId: uuidv7(),
+        signal,
+        cacheRetention: "short",
+        sessionId: options.sessionId ?? `offload-router:${slot}`,
       },
     );
     if (response.usage) options.onUsage?.(response.usage);
     return response;
+  } catch (error) {
+    if (timeoutController.signal.aborted || isTimeoutError(error)) {
+      notifyTaskTimeout(ctx, taskTimeout);
+      throw taskTimeout;
+    }
+    throw error;
   } finally {
+    clearTimeout(timeout);
     ctx.ui.setStatus(statusKey, undefined);
     release();
   }
@@ -647,14 +720,11 @@ function clipTitle(value: string): string {
   return value.replace(/^['"`]+|['"`]+$/g, "").replace(/\s+/g, " ").trim().slice(0, 80).trim();
 }
 
-function handlePassiveFailure(ctx: ExtensionCtx, slot: SlotName, error: unknown): void {
-  if (error instanceof QueueTimeoutError) {
-    emit(ctx, `${slot} skipped: ${error.message}`, "warning");
-  }
-}
+function handlePassiveFailure(_ctx: ExtensionCtx, _slot: SlotName, _error: unknown): void {}
 
 export default function offloadRouter(pi: ExtensionAPI) {
   const offloadTotals = createEmptyUsageTotals();
+  const offloadSessionId = uuidv7();
   let completionModels: string[] = [];
   const offloadBySlot: Record<SlotName, UsageTotals> = {
     compaction: createEmptyUsageTotals(),
@@ -663,9 +733,13 @@ export default function offloadRouter(pi: ExtensionAPI) {
     handoff: createEmptyUsageTotals(),
   };
 
+  function offloadRequestSessionId(slot: SlotName): string {
+    return `offload-router:${offloadSessionId}:${slot}`;
+  }
+
   function refreshOffloadFooter(ctx: ExtensionCtx): void {
     if (offloadTotals.calls > 0) {
-      ctx.ui.setStatus("offload-usage", themedStatus(ctx, formatOffloadFooter(offloadTotals)));
+      ctx.ui.setStatus("offload-usage", themedStatus(ctx, formatOffloadFooter(offloadTotals, ctx.model)));
     } else {
       ctx.ui.setStatus("offload-usage", undefined);
     }
@@ -760,6 +834,7 @@ export default function offloadRouter(pi: ExtensionAPI) {
               statusKey: "offload-test",
               statusText: `Testing ${effectiveSlot}...`,
               onUsage: (usage) => recordUsage(effectiveSlot, usage, ctx as unknown as ExtensionCtx),
+              sessionId: offloadRequestSessionId(effectiveSlot),
             },
           );
           if (!response) {
@@ -813,6 +888,7 @@ export default function offloadRouter(pi: ExtensionAPI) {
             statusKey: "handoff",
             statusText: "Generating handoff...",
             onUsage: (usage) => recordUsage("handoff", usage, ctx as unknown as ExtensionCtx),
+            sessionId: offloadRequestSessionId("handoff"),
           },
         );
 
@@ -862,6 +938,7 @@ export default function offloadRouter(pi: ExtensionAPI) {
           statusKey: "offload-compaction",
           statusText: "Offload compaction...",
           onUsage: (usage) => recordUsage("compaction", usage, ctx as unknown as ExtensionCtx),
+          sessionId: offloadRequestSessionId("compaction"),
         },
       );
       const summary = response ? extractText(response) : "";
@@ -904,6 +981,7 @@ export default function offloadRouter(pi: ExtensionAPI) {
           statusKey: "offload-branch-summary",
           statusText: "Offload branch summary...",
           onUsage: (usage) => recordUsage("branchSummary", usage, ctx as unknown as ExtensionCtx),
+          sessionId: offloadRequestSessionId("branchSummary"),
         },
       );
       const summary = response ? extractText(response) : "";
@@ -940,6 +1018,7 @@ export default function offloadRouter(pi: ExtensionAPI) {
           statusKey: "offload-title",
           statusText: "Generating title...",
           onUsage: (usage) => recordUsage("titleGeneration", usage, ctx as unknown as ExtensionCtx),
+          sessionId: offloadRequestSessionId("titleGeneration"),
         },
       );
       const title = clipTitle(response ? extractText(response) : "");
