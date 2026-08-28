@@ -38,15 +38,15 @@
   "enabled": true,
   "defaults": {
     "model": "main",
-    "taskTimeoutSeconds": 300,
-    "queueTimeoutSeconds": 300,
+    "taskTimeoutSeconds": 420,
+    "queueTimeoutSeconds": 600,
     "maxTokens": 4096
   },
   "offloads": {
     "compaction": {
       "model": "default",
       "taskTimeoutSeconds": 600,
-      "queueTimeoutSeconds": 600,
+      "queueTimeoutSeconds": 900,
       "maxTokens": 64000
     },
     "branchSummary": {
