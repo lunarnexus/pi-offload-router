@@ -550,6 +550,15 @@ function extractText(message: AssistantMessage): string {
     .trim();
 }
 
+function assistantResponseSummary(message: AssistantMessage, model: PiModel | undefined): string {
+  const contentTypes = message.content.map((item) => item.type).join(", ") || "none";
+  const usage = message.usage
+    ? ` usage=input:${message.usage.input} output:${message.usage.output} cacheRead:${message.usage.cacheRead} cacheWrite:${message.usage.cacheWrite} total:${message.usage.totalTokens}`
+    : "";
+  const error = message.errorMessage ? ` error=${message.errorMessage}` : "";
+  return `model=${modelLabel(model)} stopReason=${message.stopReason ?? "unknown"} contentTypes=${contentTypes}${usage}${error}`;
+}
+
 async function completeForSlot(
   config: OffloadRouterConfig,
   slot: SlotName,
@@ -899,7 +908,8 @@ export default function offloadRouter(pi: ExtensionAPI) {
 
         const handoff = extractText(response);
         if (!handoff.trim()) {
-          emit(ctx, "Handoff generation returned empty content", "error");
+          const model = resolveModelForSlot(config, "handoff", ctx as unknown as ExtensionCtx);
+          emit(ctx, `Handoff generation returned empty content (${assistantResponseSummary(response, model)})`, "error");
           return;
         }
 
