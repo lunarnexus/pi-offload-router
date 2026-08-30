@@ -238,10 +238,6 @@ function formatOffloadFooter(totals: UsageTotals, mainModel?: PiModel): string {
   return `↑${formatTokenCount(totals.input)} ↓${formatTokenCount(totals.output)} R${formatTokenCount(totals.cacheRead)} CH${cacheHitRate(totals).toFixed(1)}% $${formatCost(costForModel(totals, mainModel))} (offload)`;
 }
 
-function formatOffloadWidget(totals: UsageTotals, mainModel?: PiModel): string {
-  return `Offload accounting: ${totals.calls} call${totals.calls === 1 ? "" : "s"} · ↑${formatTokenCount(totals.input)} ↓${formatTokenCount(totals.output)} R${formatTokenCount(totals.cacheRead)} · CH${cacheHitRate(totals).toFixed(1)}% · $${formatCost(costForModel(totals, mainModel))}`;
-}
-
 function truncatePlainText(value: string, width: number): string {
   if (width <= 0) return "";
   if (value.length <= width) return value;
@@ -781,7 +777,7 @@ export default function offloadRouter(pi: ExtensionAPI) {
   function refreshOffloadFooter(ctx: ExtensionCtx): void {
     ctx.ui.setStatus("offload-usage", undefined);
     if (offloadTotals.calls > 0) {
-      ctx.ui.setWidget("offload-router-accounting", offloadWidget(formatOffloadWidget(offloadTotals, ctx.model)), {
+      ctx.ui.setWidget("offload-router-accounting", offloadWidget(formatOffloadFooter(offloadTotals, ctx.model)), {
         placement: "belowEditor",
       });
     } else {
