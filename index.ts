@@ -57,6 +57,17 @@ type PersistedOffloadUsage = {
   usage: Usage;
 };
 
+type WidgetTheme = {
+  fg(color: string, text: string): string;
+};
+
+type WidgetComponent = {
+  render(width: number): string[];
+  invalidate(): void;
+};
+
+type WidgetFactory = (_tui: unknown, theme: WidgetTheme) => WidgetComponent;
+
 type ExtensionCtx = {
   hasUI: boolean;
   cwd: string;
@@ -71,6 +82,7 @@ type ExtensionCtx = {
     notify(message: string, level?: NotifyLevel): void;
     confirm(title: string, message: string): Promise<boolean>;
     setStatus(key: string, value: string | undefined): void;
+    setWidget(key: string, value: string[] | WidgetFactory | undefined, options?: { placement?: "aboveEditor" | "belowEditor" }): void;
     theme?: { fg(color: string, text: string): string };
   };
   waitForIdle?: () => Promise<void>;
@@ -224,6 +236,26 @@ function costForModel(totals: UsageTotals, model: PiModel | undefined): number {
 
 function formatOffloadFooter(totals: UsageTotals, mainModel?: PiModel): string {
   return `↑${formatTokenCount(totals.input)} ↓${formatTokenCount(totals.output)} R${formatTokenCount(totals.cacheRead)} CH${cacheHitRate(totals).toFixed(1)}% $${formatCost(costForModel(totals, mainModel))} (offload)`;
+}
+
+function formatOffloadWidget(totals: UsageTotals, mainModel?: PiModel): string {
+  return `Offload accounting: ${totals.calls} call${totals.calls === 1 ? "" : "s"} · ↑${formatTokenCount(totals.input)} ↓${formatTokenCount(totals.output)} R${formatTokenCount(totals.cacheRead)} · CH${cacheHitRate(totals).toFixed(1)}% · $${formatCost(costForModel(totals, mainModel))}`;
+}
+
+function truncatePlainText(value: string, width: number): string {
+  if (width <= 0) return "";
+  if (value.length <= width) return value;
+  if (width === 1) return "…";
+  return `${value.slice(0, width - 1)}…`;
+}
+
+function offloadWidget(value: string): WidgetFactory {
+  return (_tui, theme) => ({
+    render(width: number): string[] {
+      return [theme.fg("dim", truncatePlainText(value, width))];
+    },
+    invalidate() {},
+  });
 }
 
 function addUsage(totals: UsageTotals, usage: Usage): void {
@@ -747,10 +779,13 @@ export default function offloadRouter(pi: ExtensionAPI) {
   }
 
   function refreshOffloadFooter(ctx: ExtensionCtx): void {
+    ctx.ui.setStatus("offload-usage", undefined);
     if (offloadTotals.calls > 0) {
-      ctx.ui.setStatus("offload-usage", themedStatus(ctx, formatOffloadFooter(offloadTotals, ctx.model)));
+      ctx.ui.setWidget("offload-router-accounting", offloadWidget(formatOffloadWidget(offloadTotals, ctx.model)), {
+        placement: "belowEditor",
+      });
     } else {
-      ctx.ui.setStatus("offload-usage", undefined);
+      ctx.ui.setWidget("offload-router-accounting", undefined);
     }
   }
 
