@@ -37,17 +37,17 @@
   //   Maximum number of offload requests running at once.
   "enabled": true,
   "defaults": {
-    "model": "main",
-    "taskTimeoutSeconds": 420,
+    "model": "lmstudio/LOADED",
+    "taskTimeoutSeconds": 300,
     "queueTimeoutSeconds": 600,
-    "maxTokens": 4096
+    "maxTokens": 8192
   },
   "offloads": {
     "compaction": {
       "model": "default",
       "taskTimeoutSeconds": 600,
-      "queueTimeoutSeconds": 900,
-      "maxTokens": 64000
+      "queueTimeoutSeconds": 600,
+      "maxTokens": 16384
     },
     "branchSummary": {
       "model": "default"
