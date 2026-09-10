@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path, { dirname, join, resolve } from "node:path";
@@ -308,9 +308,8 @@ function writeJsonFile(filePath: string, value: unknown): void {
 
 function ensureRuntimeConfigFile(): unknown {
   if (!existsSync(CONFIG_PATH)) {
-    const config = loadPackageDefaultConfig();
-    writeJsonFile(CONFIG_PATH, config);
-    return config;
+    mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
+    copyFileSync(DEFAULT_CONFIG_PATH, CONFIG_PATH);
   }
   return parseConfigText(readFileSync(CONFIG_PATH, "utf8"));
 }

@@ -1,31 +1,35 @@
 # pi-offload-router
 
-Pi extension package for routing selected session-maintenance helper calls to cheap, small, or local models.
+Pi extension package for routing selected session-maintenance helper calls to a configured offload model.
 
-## Idea
+## What it does
 
-Use an offload model for bounded helper work while the main Pi coding agent continues using the user's selected model.
+`pi-offload-router` lets Pi use a separate model for bounded helper work while your main Pi session keeps using the model you selected for coding.
 
-Accepted initial features:
+Supported offload slots:
 
-- summarize old conversation history during compaction;
-- summarize abandoned branches during `/tree` navigation;
-- generate short session titles using Pi's public session-name API;
-- generate `HANDOFF.md` through an integrated `/handoff [focus]` command.
+- compaction summaries for old conversation history;
+- abandoned-branch summaries during `/tree` navigation;
+- short session title generation;
+- `HANDOFF.md` generation through `/handoff [focus]`.
 
-Wishlist items, including large tool-output compression and session-search summarization, are tracked in `ROADMAP.md`.
-
-## Status
-
-Early foundation/research scaffold. This repository was initialized from the `pi-lmstudio` Pi plugin skeleton; the copied implementation still needs to be replaced with offload-router behavior.
+Offload usage is tracked separately from Pi's main model usage and shown as an offload subtotal.
 
 ## Install
 
-This package is intended to be installed from our Gitea site as a normal Pi package:
+Install from GitHub as a Pi package, preferably pinned to a release tag:
 
 ```bash
-pi install git:<our-gitea-host>/<owner>/pi-offload-router@<ref>
+pi install git:github.com/LunarNexus/pi-offload-router@v0.1.0
 ```
+
+For local development or one-off testing:
+
+```bash
+pi -e ./index.ts
+```
+
+Pi packages and extensions run with your user permissions. Review source before installing packages from any third-party repository.
 
 ## Configuration
 
@@ -35,27 +39,25 @@ Runtime config lives outside the package so package updates do not overwrite use
 ~/.pi/agent/offload-router.json
 ```
 
-The package includes `offload-router.json` at the repo root. On startup, if this runtime config is missing, the extension should create it from the package default config.
+On startup, if this runtime config is missing, the extension copies the packaged `offload-router.json` into that location. The config supports JSONC, so `//` and `/* ... */` comments are allowed.
 
-The runtime config supports JSONC, so `//` and `/* ... */` comments are allowed.
-
-Example config:
+Example config shape:
 
 ```json
 {
   "enabled": true,
   "defaults": {
-    "model": "main",
-    "taskTimeoutSeconds": 120,
-    "queueTimeoutSeconds": 300,
-    "maxTokens": 4096
+    "model": "lmstudio/LOADED",
+    "taskTimeoutSeconds": 300,
+    "queueTimeoutSeconds": 600,
+    "maxTokens": 8192
   },
   "offloads": {
     "compaction": {
       "model": "default",
-      "taskTimeoutSeconds": 180,
+      "taskTimeoutSeconds": 600,
       "queueTimeoutSeconds": 600,
-      "maxTokens": 4096
+      "maxTokens": 16384
     },
     "branchSummary": {
       "model": "default"
@@ -75,14 +77,14 @@ Example config:
 
 Each offload task is configured separately.
 
-- `defaults` provides the global explicit defaults.
+- `defaults` provides global explicit defaults.
 - `compaction` keeps explicit timeout/token overrides.
 - `branchSummary`, `titleGeneration`, and `handoff` inherit the global timeout/token settings unless you add overrides.
 - `model` can be:
-  - `"default"` to use `defaults.model`
-  - `"main"` to use Pi's current main session model
-  - a Pi model string like `"lmstudio/qwen3-4b-instruct"`
-- No hidden defaults live in code; effective values come from the shipped config plus explicit overrides.
+  - `"default"` to use `defaults.model`;
+  - `"main"` to use Pi's current main session model;
+  - a Pi model string like `"lmstudio/qwen3-4b-instruct"`.
+- Effective values come from the shipped config plus explicit runtime overrides.
 
 ## Usage accounting
 
@@ -95,8 +97,6 @@ All offload usage is tracked by this plugin as an **offload subtotal**.
 
 ## Commands
 
-Planned commands:
-
 ```text
 /offload status
 /offload on
@@ -107,17 +107,15 @@ Planned commands:
 /handoff [focus]
 ```
 
-## Initial MVP proposal
+## Development checks
 
-1. Implement config loading/writing and `/offload status`.
-2. Integrate existing `/handoff [focus]` behavior and route it through the `handoff` slot.
-3. Implement custom compaction using Pi's `session_before_compact` hook.
-4. Implement branch summarization using `session_before_tree`.
-5. Implement title generation using Pi's public `ExtensionAPI.setSessionName(name)` API.
+```bash
+npm install
+npm run typecheck
+npm pack --dry-run
+```
 
 ## References
 
-- Pi extensions docs: https://github.com/earendil-works/pi-mono/tree/main/packages/coding-agent/docs/extensions.md
-- Pi compaction docs: https://github.com/earendil-works/pi-mono/tree/main/packages/coding-agent/docs/compaction.md
-- Hermes auxiliary models docs: https://hermes-agent.nousresearch.com/docs/user-guide/configuration#auxiliary-models
-- Hermes fallback/auxiliary task docs: https://hermes-agent.nousresearch.com/docs/user-guide/features/fallback-providers#auxiliary-task-fallback
+- Pi package docs: https://pi.dev/docs/latest/packages
+- Pi extension docs: https://pi.dev/docs/latest/extensions
