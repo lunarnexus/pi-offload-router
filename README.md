@@ -1,27 +1,25 @@
 # pi-offload-router
 
-Pi extension package for routing selected session-maintenance helper calls to a configured offload model.
+Use a cheaper model for Pi's housekeeping work.
 
-## What it does
+Pi can spend a surprising amount of model time on side jobs: compacting long chats, summarizing branches, naming sessions, and writing handoff notes. `pi-offload-router` sends those jobs to the model you choose, so your main coding model can stay focused on the actual work.
 
-`pi-offload-router` lets Pi use a separate model for bounded helper work while your main Pi session keeps using the model you selected for coding.
+Good fits:
 
-Supported offload slots:
-
-- compaction summaries for old conversation history;
-- abandoned-branch summaries during `/tree` navigation;
-- short session title generation;
-- `HANDOFF.md` generation through `/handoff [focus]`.
-
-Offload usage is tracked separately from Pi's main model usage and shown as an offload subtotal.
+- use a local LM Studio or Ollama model for summaries;
+- use a cheaper cloud model for background chores;
+- keep expensive models for coding, debugging, and review;
+- see offload token usage separately from your main session usage.
 
 ## Install
 
-Install from GitHub as a Pi package, preferably pinned to a release tag:
+From GitHub:
 
 ```bash
 pi install git:github.com/LunarNexus/pi-offload-router@v0.1.0
 ```
+
+Then restart Pi or run `/reload`.
 
 For local development or one-off testing:
 
@@ -31,15 +29,35 @@ pi -e ./index.ts
 
 Pi packages and extensions run with your user permissions. Review source before installing packages from any third-party repository.
 
+## What gets routed?
+
+`pi-offload-router` can route these Pi side jobs:
+
+- `/compact` summaries for old conversation history;
+- abandoned-branch summaries during `/tree` navigation;
+- short session title generation;
+- `HANDOFF.md` generation through `/handoff [focus]`.
+
+If offloading is disabled or the configured model cannot be found, Pi keeps going without the offload result.
+
+## Quick test
+
+```text
+/offload status
+/offload test handoff Write one sentence about this session.
+```
+
 ## Configuration
 
-Runtime config lives outside the package so package updates do not overwrite user settings:
+The first time Pi loads the extension, it creates:
 
 ```text
 ~/.pi/agent/offload-router.json
 ```
 
-On startup, if this runtime config is missing, the extension copies the packaged `offload-router.json` into that location. The config supports JSONC, so `//` and `/* ... */` comments are allowed.
+Edit that file to pick the model used for background jobs. Package updates will not overwrite it.
+
+The config supports comments, so the generated file includes notes inline.
 
 Example config shape:
 
@@ -75,25 +93,20 @@ Example config shape:
 }
 ```
 
-Each offload task is configured separately.
+Model values can be:
 
-- `defaults` provides global explicit defaults.
-- `compaction` keeps explicit timeout/token overrides.
-- `branchSummary`, `titleGeneration`, and `handoff` inherit the global timeout/token settings unless you add overrides.
-- `model` can be:
-  - `"default"` to use `defaults.model`;
-  - `"main"` to use Pi's current main session model;
-  - a Pi model string like `"lmstudio/qwen3-4b-instruct"`.
-- Effective values come from the shipped config plus explicit runtime overrides.
+- `"default"` to use `defaults.model`;
+- `"main"` to use Pi's current main session model;
+- a Pi model string like `"lmstudio/qwen3-4b-instruct"`.
 
-## Usage accounting
+## Where did the tokens go?
 
-All offload usage is tracked by this plugin as an **offload subtotal**.
+All offload usage is tracked as a separate subtotal.
 
-- Offload usage is shown in a compact footer/status line in Pi.
-- `/offload status` shows the detailed subtotal and per-task breakdown.
-- Offload usage is persisted in session custom entries, so reload/resume can rebuild the subtotal from session history and forked sessions carry forward the copied branch totals.
-- Offload usage is intentionally kept separate from Pi's main footer totals so all offload actions follow the same accounting model.
+- A compact footer/status line shows offload usage in Pi.
+- `/offload status` shows totals and a per-job breakdown.
+- Reloaded and forked sessions keep their offload totals through Pi session entries.
+- Offload usage stays separate from Pi's main footer totals.
 
 ## Commands
 
@@ -106,6 +119,27 @@ All offload usage is tracked by this plugin as an **offload subtotal**.
 /offload test [slot] [prompt]
 /handoff [focus]
 ```
+
+## Publishing to pi.dev/packages
+
+The Pi package gallery lists packages published to npm with the `pi-package` keyword and a `pi` manifest in `package.json`.
+
+Before publishing:
+
+```bash
+npm install
+npm run typecheck
+npm pack --dry-run
+npm publish
+```
+
+After npm publishes the package, it should be installable with:
+
+```bash
+pi install npm:pi-offload-router
+```
+
+GitHub installs work now; npm publishing is what makes the package show up in the Pi gallery.
 
 ## Development checks
 
