@@ -1,6 +1,6 @@
 {
   "name": "pi-offload-router",
-  "version": "0.1.0",
+  "version": "0.4.2",
   "description": "Use a cheaper model for Pi's housekeeping work.",
   "type": "module",
   "keywords": [
