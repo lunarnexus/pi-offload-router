@@ -235,7 +235,7 @@ function costForModel(totals: UsageTotals, model: PiModel | undefined): number {
 }
 
 function formatOffloadFooter(totals: UsageTotals, mainModel?: PiModel): string {
-  return `↑${formatTokenCount(totals.input)} ↓${formatTokenCount(totals.output)} R${formatTokenCount(totals.cacheRead)} CH${cacheHitRate(totals).toFixed(1)}% $${formatCost(costForModel(totals, mainModel))} (offload)`;
+  return `↑${formatTokenCount(totals.input)} ↓${formatTokenCount(totals.output)} R${formatTokenCount(totals.cacheRead)} CH${cacheHitRate(totals).toFixed(1)}% -$${formatCost(costForModel(totals, mainModel))} (offload)`;
 }
 
 function truncatePlainText(value: string, width: number): string {
